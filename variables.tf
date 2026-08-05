@@ -1,4 +1,3 @@
-```hcl
 variable "bucket_name_prefix" {
   description = "Prefix for the S3 bucket name"
   type        = string
@@ -10,4 +9,3 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
-```
