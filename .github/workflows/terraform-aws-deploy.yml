@@ -1,1 +1,90 @@
+name: Terraform AWS Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the Terraform plan after validation
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-aws-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Discover Terraform configurations
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.terraform.outputs.directories }}
+      found: ${{ steps.terraform.outputs.found }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Find Terraform directories
+        id: terraform
+        shell: bash
+        run: |
+          directories=$(find . -type f -name '*.tf' \
+            -not -path '*/.terraform/*' \
+            -not -path './.git/*' \
+            -printf '%h\n' | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "directories=$directories" >> "$GITHUB_OUTPUT"
+          if [ "$directories" = "[]" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Terraform - ${{ matrix.directory }}
+    needs: discover
+    if: needs.discover.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJSON(needs.discover.outputs.directories) }}
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Terraform apply
+        if: inputs.apply == true
+        run: terraform apply -input=false -auto-approve tfplan
 
